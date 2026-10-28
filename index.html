@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rádio Mundo</title>
+<meta name="description" content="Ouça milhares de rádios do Brasil e do mundo ao vivo.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E📻%3C/text%3E%3C/svg%3E">
+<style>
+:root{--bg:#faf9f5;--surface:#fff;--text:#1f1e1d;--muted:#6b6a65;--line:#e4e2da;--accent:#0f6e56;--accent-bg:#e1f5ee;--danger:#a32d2d;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1b19;--surface:#262521;--text:#f1efe8;--muted:#a3a198;--line:#3a3935;--accent:#5dcaa5;--accent-bg:#04342c;--danger:#f09595;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:820px;margin:0 auto;padding:20px 16px 150px}
+h1{font-size:24px;font-weight:600;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 16px;font-size:14px}
+input,select,button{font:inherit;color:var(--text)}
+.filters{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.filters input{grid-column:1/-1}
+input[type=search],select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.tabs{display:flex;gap:8px;margin:12px 0}
+.tab{padding:6px 14px;border:1px solid var(--line);border-radius:999px;background:var(--surface);cursor:pointer;font-size:14px}
+.tab[aria-pressed=true]{background:var(--accent-bg);border-color:var(--accent);color:var(--accent)}
+ul{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+li{display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+li.on{border-color:var(--accent)}
+.play{flex:none;width:40px;height:40px;border-radius:50%;border:none;background:var(--accent);color:var(--bg);cursor:pointer;font-size:16px}
+.logo{flex:none;width:36px;height:36px;border-radius:6px;object-fit:cover;background:var(--line)}
+.info{flex:1;min-width:0}
+.name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta{font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fav{flex:none;background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted)}
+.fav[aria-pressed=true]{color:var(--accent)}
+.empty{padding:24px;text-align:center;color:var(--muted);display:block}
+.empty.err{color:var(--danger)}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px))}
+.bar-in{max-width:820px;margin:0 auto;display:flex;align-items:center;gap:12px}
+.status{font-size:13px;color:var(--muted)}
+.status.err{color:var(--danger)}
+input[type=range]{width:90px;accent-color:var(--accent)}
+.note{font-size:13px;color:var(--muted);margin-top:16px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Rádio Mundo</h1>
+  <p class="sub">Milhares de estações do Brasil e do mundo, ao vivo.</p>
+  <div class="filters">
+    <input type="search" id="q" placeholder="Buscar pelo nome da rádio" aria-label="Buscar estações">
+    <select id="country" aria-label="País"><option value="BR">Brasil</option><option value="">Todo o mundo</option></select>
+    <select id="tag" aria-label="Gênero"><option value="">Todos os gêneros</option></select>
+  </div>
+  <div class="tabs">
+    <button class="tab" id="t-explore" aria-pressed="true">Explorar</button>
+    <button class="tab" id="t-favs" aria-pressed="false">Favoritas</button>
+  </div>
+  <ul id="list"></ul>
+  <p class="note">Dados do diretório aberto <a href="https://www.radio-browser.info" target="_blank" rel="noopener">Radio Browser</a>. Os endereços são mantidos pela comunidade e algumas estações podem estar fora do ar.</p>
+</main>
+
+<div class="bar">
+  <div class="bar-in">
+    <button class="play" id="main-play" aria-label="Tocar ou pausar" disabled>▶</button>
+    <div class="info">
+      <div class="name" id="now">Escolha uma estação</div>
+      <div class="status" id="status">Parado</div>
+    </div>
+    <input type="range" id="vol" min="0" max="1" step="0.05" value="0.8" aria-label="Volume">
+  </div>
+</div>
+
+<script>
+var SERVERS=["https://de1.api.radio-browser.info","https://nl1.api.radio-browser.info","https://at1.api.radio-browser.info"];
+var $=function(i){return document.getElementById(i)};
+var audio=new Audio();audio.volume=0.8;audio.preload="none";
+var cur=null,view="explore",results=[],byId={},timer=null,reqId=0;
+var favs=load("rm-favs",[]);
+function load(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}}
+function save(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
+function esc(t){var d=document.createElement("div");d.textContent=t==null?"":String(t);return d.innerHTML}
+function setStatus(t,err){var s=$("status");s.textContent=t;s.className="status"+(err?" err":"")}
+
+async function api(path){
+  var lastErr;
+  for(var i=0;i<SERVERS.length;i++){
+    var ctl=new AbortController(),to=setTimeout(function(){ctl.abort()},8000);
+    try{
+      var r=await fetch(SERVERS[i]+path,{signal:ctl.signal});
+      clearTimeout(to);
+      if(!r.ok)throw new Error("HTTP "+r.status);
+      return await r.json();
+    }catch(e){clearTimeout(to);lastErr=e}
+  }
+  throw lastErr;
+}
+
+async function init(){
+  try{
+    var names=new Intl.DisplayNames(["pt-BR"],{type:"region"});
+    var cs=await api("/json/countries?hidebroken=true");
+    var opts=cs.filter(function(c){return c.iso_3166_1&&c.stationcount>0&&c.iso_3166_1!=="BR"}).map(function(c){
+      var n;try{n=names.of(c.iso_3166_1)}catch(e){n=c.name}
+      return {code:c.iso_3166_1,name:n||c.name}
+    }).sort(function(a,b){return a.name.localeCompare(b.name,"pt-BR")});
+    var html='<option value="BR">Brasil</option><option value="">Todo o mundo</option>';
+    opts.forEach(function(o){html+='<option value="'+esc(o.code)+'">'+esc(o.name)+'</option>'});
+    $("country").innerHTML=html;
+  }catch(e){}
+  try{
+    var tags=await api("/json/tags?order=stationcount&reverse=true&limit=60&hidebroken=true");
+    var th='<option value="">Todos os gêneros</option>';
+    tags.forEach(function(t){if(t.name&&/^[\p{L}\p{N} &-]+$/u.test(t.name))th+='<option value="'+esc(t.name)+'">'+esc(t.name)+'</option>'});
+    $("tag").innerHTML=th;
+  }catch(e){}
+}
+
+async function search(){
+  var id=++reqId;
+  $("list").innerHTML='<li class="empty">Carregando…</li>';
+  var p=new URLSearchParams({limit:"80",hidebroken:"true",order:"clickcount",reverse:"true",is_https:"true"});
+  var q=$("q").value.trim(),c=$("country").value,t=$("tag").value;
+  if(q)p.set("name",q);if(c)p.set("countrycode",c);if(t)p.set("tag",t);
+  try{
+    var data=await api("/json/stations/search?"+p.toString());
+    if(id!==reqId)return;
+    results=data.filter(function(s){return s.url_resolved&&/^https:/i.test(s.url_resolved)});
+    results.forEach(function(s){byId[s.stationuuid]=s});
+    render();
+  }catch(e){
+    if(id!==reqId)return;
+    $("list").innerHTML='<li class="empty err">Não foi possível carregar o diretório. Verifique sua conexão e tente de novo.</li>';
+  }
+}
+
+function render(){
+  var items=view==="favs"?favs:results;
+  if(!items.length){
+    $("list").innerHTML='<li class="empty">'+(view==="favs"?"Você ainda não tem favoritas.":"Nenhuma estação encontrada.")+'</li>';
+    return;
+  }
+  $("list").innerHTML=items.map(function(s){
+    var on=cur&&cur.stationuuid===s.stationuuid,fav=favs.some(function(f){return f.stationuuid===s.stationuuid});
+    var logo=s.favicon&&/^https:/i.test(s.favicon)?'<img class="logo" loading="lazy" src="'+esc(s.favicon)+'" alt="" onerror="this.style.visibility=\'hidden\'">':'<span class="logo"></span>';
+    var meta=[s.country,(s.tags||"").split(",").slice(0,2).join(", "),s.bitrate?s.bitrate+" kbps":""].filter(Boolean).map(esc).join(" · ");
+    return '<li class="'+(on?"on":"")+'"><button class="play" data-play="'+esc(s.stationuuid)+'" aria-label="Tocar '+esc(s.name)+'">'+(on&&!audio.paused?"❚❚":"▶")+'</button>'+logo+'<div class="info"><div class="name">'+esc(s.name.trim())+'</div><div class="meta">'+meta+'</div></div><button class="fav" data-fav="'+esc(s.stationuuid)+'" aria-pressed="'+fav+'" aria-label="Favoritar">'+(fav?"★":"☆")+'</button></li>';
+  }).join("");
+}
+
+function play(s){
+  if(cur&&cur.stationuuid===s.stationuuid){
+    if(audio.paused){audio.play().catch(fail)}else{audio.pause()}
+    return;
+  }
+  cur=s;audio.src=s.url_resolved;$("now").textContent=s.name.trim();$("main-play").disabled=false;
+  setStatus("Conectando…");
+  audio.play().catch(fail);render();
+  api("/json/url/"+encodeURIComponent(s.stationuuid)).catch(function(){});
+}
+function fail(){setStatus("Esta estação não respondeu. Tente outra.",true);$("main-play").textContent="▶";render()}
+audio.addEventListener("playing",function(){setStatus("Ao vivo");$("main-play").textContent="❚❚";render()});
+audio.addEventListener("pause",function(){if(cur&&!audio.error)setStatus("Pausado");$("main-play").textContent="▶";render()});
+audio.addEventListener("waiting",function(){setStatus("Carregando…")});
+audio.addEventListener("error",fail);
+
+$("main-play").onclick=function(){if(cur)play(cur)};
+$("vol").oninput=function(){audio.volume=+this.value};
+$("list").onclick=function(e){
+  var p=e.target.closest("[data-play]"),f=e.target.closest("[data-fav]");
+  if(p){var s=byId[p.dataset.play]||favs.filter(function(x){return x.stationuuid===p.dataset.play})[0];if(s)play(s)}
+  if(f){
+    var id=f.dataset.fav,i=favs.findIndex(function(x){return x.stationuuid===id});
+    if(i>=0)favs.splice(i,1);else if(byId[id])favs.push(byId[id]);
+    save("rm-favs",favs);render();
+  }
+};
+function setView(v){
+  view=v;
+  $("t-explore").setAttribute("aria-pressed",v==="explore");
+  $("t-favs").setAttribute("aria-pressed",v==="favs");
+  render();
+}
+$("t-explore").onclick=function(){setView("explore")};
+$("t-favs").onclick=function(){setView("favs")};
+function trigger(){setView("explore");search()}
+$("q").oninput=function(){clearTimeout(timer);timer=setTimeout(trigger,400)};
+$("country").onchange=trigger;
+$("tag").onchange=trigger;
+
+init();search();
+</script>
+</body>
+</html>
